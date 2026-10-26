@@ -1,0 +1,9 @@
+﻿<Application x:Class="shop_pc.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:shop_pc"
+             StartupUri="window/Authorization.xaml">
+    <Application.Resources>
+         
+    </Application.Resources>
+</Application>

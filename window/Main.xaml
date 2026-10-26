@@ -1,0 +1,62 @@
+﻿<Window x:Class="shop_pc.window.Main"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:shop_pc.window"
+        mc:Ignorable="d"
+        Title="Main" Height="750" Width="1200">
+    <Window.Resources>
+        <Style x:Key="MenuButton" TargetType="Button">
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="Padding" Value="20,12"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Background" Value="#374151"/>
+        </Style>
+    </Window.Resources>
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="220"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+       
+        <DockPanel LastChildFill="False" Grid.Column="0" Background="#1F2937">
+            <TextBlock x:Name="UserInfo" DockPanel.Dock="Top" Foreground="#9CA3AF"
+                       FontSize="12" TextWrapping="Wrap" Margin="20,-12,20,16"/>
+            <TextBlock DockPanel.Dock="Top" Text="Компьютерный магазин"
+                       Foreground="White" FontSize="16" FontWeight="Bold"
+                       TextWrapping="Wrap" HorizontalAlignment="Center"/>
+
+            <Button DockPanel.Dock="Bottom"  Content="Выход" 
+                    Width="100" Height="50" Margin="0,30,120,0"
+                    Style="{StaticResource MenuButton}"
+                    Click="ExitButton_Click"/>
+
+            <StackPanel DockPanel.Dock="Bottom">
+                <Button  x:Name="CatalogButton" Content="Каталог"  Style="{StaticResource MenuButton}" Click="MenuButton_Click"/>
+                <Button  x:Name="SalesButton"  Content="Продажи"  Style="{StaticResource MenuButton}" Click="MenuButton_Click"/>
+                <Button  x:Name="ReportsButton"  Content="Сотрудники"  Style="{StaticResource MenuButton}" Click="MenuButton_Click"/>
+                <Button  x:Name="UsersButton" Content="Отчеты"  Style="{StaticResource MenuButton}" Click="MenuButton_Click"/>
+            </StackPanel>
+                
+
+         </DockPanel>
+      
+        <Grid Grid.Column="1" Background="#F3F4F6">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            
+            <Border Grid.Row="0" Background="White" Padding="15">
+                <TextBlock x:Name="PageTitle" Text="Каталог"
+                           FontSize="22" FontWeight="Bold"/>
+
+            </Border>
+            <ContentControl x:Name="PageHost" Grid.Row="1" Margin="15"/>
+        </Grid>
+    </Grid>
+
+</Window>

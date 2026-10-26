@@ -1,0 +1,244 @@
+﻿/* =====================================================================
+   БД: ITExpertShop — Система управления магазина компьютерной техники
+   Microsoft SQL Server. Скрипт создаёт НОВУЮ базу с нуля (старую не трогает).
+   Запускать целиком в SSMS (кнопка Execute).
+
+   Порядок:
+     1. База данных
+     2. Таблицы
+     3. Индексы
+     4. Тестовые данные
+     5. Функции и представления для отчётов
+   ===================================================================== */
+
+-- ---------------------------------------------------------------------
+-- 1. БАЗА ДАННЫХ
+-- ---------------------------------------------------------------------
+create database shop_pc
+
+use shop_pc
+
+-- ---------------------------------------------------------------------
+-- 2. ТАБЛИЦЫ
+-- ---------------------------------------------------------------------
+
+-- Роли сотрудников
+CREATE TABLE Roles (
+    Id       INT IDENTITY(1,1) PRIMARY KEY,
+    RoleName NVARCHAR(50) NOT NULL UNIQUE
+);
+
+-- Категории комплектующих
+CREATE TABLE Categories (
+    Id   INT IDENTITY(1,1) PRIMARY KEY,
+    Name NVARCHAR(100) NOT NULL UNIQUE
+);
+
+-- Пользователи системы (сотрудники)
+CREATE TABLE Users (
+    Id           INT IDENTITY(1,1) PRIMARY KEY,
+    Login        NVARCHAR(50)  NOT NULL UNIQUE,
+    PasswordHash NVARCHAR(255) NOT NULL,           -- SHA-256 в hex (см. комментарий ниже)
+    FullName     NVARCHAR(150) NOT NULL,
+    RoleId       INT NOT NULL,
+    IsActive     BIT NOT NULL DEFAULT 1,           -- админ может заблокировать, не удаляя
+    CONSTRAINT FK_Users_Roles FOREIGN KEY (RoleId) REFERENCES Roles(Id)
+);
+
+-- Товары и комплектующие
+CREATE TABLE Products (
+    Id             INT IDENTITY(1,1) PRIMARY KEY,
+    Sku            NVARCHAR(50)  NOT NULL UNIQUE,  -- артикул
+    Name           NVARCHAR(255) NOT NULL,
+    CategoryId     INT NOT NULL,
+    Price          DECIMAL(10,2) NOT NULL CHECK (Price >= 0),
+    StockQuantity  INT NOT NULL DEFAULT 0 CHECK (StockQuantity >= 0),
+    Specifications NVARCHAR(MAX) NULL,
+    IsActive       BIT NOT NULL DEFAULT 1,         -- «удаление» товара = IsActive = 0
+    RowVersion     ROWVERSION,                     -- защита от параллельных правок (EF Core)
+    CONSTRAINT FK_Products_Categories FOREIGN KEY (CategoryId) REFERENCES Categories(Id)
+);
+
+-- Заказы / продажи
+CREATE TABLE Orders (
+    Id          INT IDENTITY(1,1) PRIMARY KEY,
+    OrderDate   DATETIME NOT NULL DEFAULT GETDATE(),
+    UserId      INT NOT NULL,                      -- сотрудник, оформивший заказ
+    TotalAmount DECIMAL(10,2) NOT NULL DEFAULT 0 CHECK (TotalAmount >= 0),
+    Status      NVARCHAR(50) NOT NULL DEFAULT N'Новый',
+    CONSTRAINT FK_Orders_Users FOREIGN KEY (UserId) REFERENCES Users(Id),
+    CONSTRAINT CK_Orders_Status CHECK (Status IN (N'Новый', N'Проведён', N'Отменён'))
+);
+
+-- Позиции заказа
+CREATE TABLE OrderItems (
+    Id        INT IDENTITY(1,1) PRIMARY KEY,
+    OrderId   INT NOT NULL,
+    ProductId INT NOT NULL,
+    Quantity  INT NOT NULL CHECK (Quantity > 0),
+    UnitPrice DECIMAL(10,2) NOT NULL CHECK (UnitPrice >= 0),  -- цена на момент продажи
+    CONSTRAINT FK_OrderItems_Orders   FOREIGN KEY (OrderId)   REFERENCES Orders(Id) ON DELETE CASCADE,
+    CONSTRAINT FK_OrderItems_Products FOREIGN KEY (ProductId) REFERENCES Products(Id),
+    CONSTRAINT UQ_OrderItems_Order_Product UNIQUE (OrderId, ProductId)  -- один товар = одна строка
+);
+
+-- Списание товара
+CREATE TABLE WriteOffs (
+    Id           INT IDENTITY(1,1) PRIMARY KEY,
+    ProductId    INT NOT NULL,
+    Quantity     INT NOT NULL CHECK (Quantity > 0),
+    Reason       NVARCHAR(255) NOT NULL,
+    WriteOffDate DATETIME NOT NULL DEFAULT GETDATE(),
+    UserId       INT NOT NULL,                     -- кто списал
+    CONSTRAINT FK_WriteOffs_Products FOREIGN KEY (ProductId) REFERENCES Products(Id),
+    CONSTRAINT FK_WriteOffs_Users    FOREIGN KEY (UserId)    REFERENCES Users(Id)
+);
+
+
+-- ---------------------------------------------------------------------
+-- 3. ИНДЕКСЫ (UNIQUE-поля индексируются автоматически)
+-- ---------------------------------------------------------------------
+CREATE INDEX IX_Products_Name       ON Products(Name);
+CREATE INDEX IX_Products_CategoryId ON Products(CategoryId);
+CREATE INDEX IX_Orders_OrderDate    ON Orders(OrderDate) INCLUDE (Status);
+CREATE INDEX IX_Orders_UserId       ON Orders(UserId);
+CREATE INDEX IX_OrderItems_ProductId ON OrderItems(ProductId);
+CREATE INDEX IX_WriteOffs_ProductId ON WriteOffs(ProductId);
+GO
+
+-- ---------------------------------------------------------------------
+-- 4. ТЕСТОВЫЕ ДАННЫЕ
+-- ---------------------------------------------------------------------
+
+INSERT INTO Roles (RoleName) VALUES (N'Админ'), (N'Продавец'), (N'Склад');
+
+INSERT INTO Categories (Name) VALUES
+    (N'Процессоры'), (N'Видеокарты'), (N'Материнские платы'),
+    (N'Оперативная память'), (N'Накопители'), (N'Блоки питания'),
+    (N'Корпуса'), (N'Ноутбуки'), (N'Готовые ПК');
+
+/* Пароли хранятся как SHA-256 (hex, заглавными). Тестовый пароль у всех: 123
+   В C# хеш считается так (должен совпадать с хешем в базе):
+       Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(password)))
+   Внимание: HASHBYTES('SHA2_256', '123') — без буквы N перед строкой! */
+INSERT INTO Users (Login, PasswordHash, FullName, RoleId) VALUES
+    (N'admin',  CONVERT(NVARCHAR(64), HASHBYTES('SHA2_256', '123'), 2), N'Администратор Системы',  (SELECT Id FROM Roles WHERE RoleName = N'Админ')),
+    (N'seller', CONVERT(NVARCHAR(64), HASHBYTES('SHA2_256', '123'), 2), N'Иванов Пётр Сергеевич', (SELECT Id FROM Roles WHERE RoleName = N'Продавец')),
+    (N'sklad',  CONVERT(NVARCHAR(64), HASHBYTES('SHA2_256', '123'), 2), N'Петрова Анна Игоревна', (SELECT Id FROM Roles WHERE RoleName = N'Склад'));
+
+-- Товары (цены и характеристики условные)
+INSERT INTO Products (Sku, Name, CategoryId, Price, StockQuantity, Specifications)
+SELECT v.Sku, v.Name, c.Id, v.Price, v.Stock, v.Specs
+FROM (VALUES
+    ('CPU-AMD-7600',   N'AMD Ryzen 5 7600',              N'Процессоры',         21990.00, 12, N'Socket AM5; 6 ядер / 12 потоков; 3.8–5.1 ГГц; TDP 65 Вт'),
+    ('CPU-AMD-7700X',  N'AMD Ryzen 7 7700X',             N'Процессоры',         31990.00,  6, N'Socket AM5; 8 ядер / 16 потоков; 4.5–5.4 ГГц; TDP 105 Вт'),
+    ('CPU-INT-13400F', N'Intel Core i5-13400F',          N'Процессоры',         19990.00,  2, N'LGA1700; 10 ядер / 16 потоков; до 4.6 ГГц; TDP 65 Вт'),
+    ('CPU-INT-13700K', N'Intel Core i7-13700K',          N'Процессоры',         41990.00,  4, N'LGA1700; 16 ядер / 24 потока; до 5.4 ГГц; TDP 125 Вт'),
+    ('GPU-NV-4060',    N'NVIDIA GeForce RTX 4060 8GB',   N'Видеокарты',         34990.00,  7, N'GDDR6 8 ГБ; 128 бит; PCIe 4.0'),
+    ('GPU-NV-4070',    N'NVIDIA GeForce RTX 4070 12GB',  N'Видеокарты',         59990.00,  1, N'GDDR6X 12 ГБ; 192 бит; PCIe 4.0'),
+    ('GPU-AMD-7600',   N'AMD Radeon RX 7600 8GB',        N'Видеокарты',         28990.00,  5, N'GDDR6 8 ГБ; 128 бит; PCIe 4.0'),
+    ('MB-MSI-B650',    N'MSI B650 Gaming Plus WiFi',     N'Материнские платы',  17990.00,  8, N'Socket AM5; DDR5; ATX; Wi-Fi'),
+    ('MB-ASUS-B760',   N'ASUS PRIME B760M-K',            N'Материнские платы',  10990.00,  9, N'LGA1700; DDR4; mATX'),
+    ('RAM-KNG-16',     N'Kingston Fury Beast 16GB DDR5-5600', N'Оперативная память', 4990.00, 20, N'DDR5; 16 ГБ; 5600 МГц; 1 модуль'),
+    ('RAM-CRS-32',     N'Corsair Vengeance 32GB (2x16) DDR5-6000', N'Оперативная память', 11990.00, 10, N'DDR5; 32 ГБ (2x16); 6000 МГц'),
+    ('SSD-SAM-1TB',    N'Samsung 980 1TB NVMe',          N'Накопители',          6990.00, 15, N'SSD M.2 NVMe; 1 ТБ; чтение до 3500 МБ/с'),
+    ('SSD-KNG-500',    N'Kingston NV2 500GB NVMe',      N'Накопители',          3490.00, 25, N'SSD M.2 NVMe; 500 ГБ; чтение до 3500 МБ/с'),
+    ('HDD-SEA-2TB',    N'Seagate Barracuda 2TB',         N'Накопители',          4990.00,  3, N'HDD 3.5"; 2 ТБ; 7200 об/мин'),
+    ('PSU-CRS-650',    N'Corsair CX650 650W',            N'Блоки питания',       5990.00, 11, N'650 Вт; 80+ Bronze; ATX'),
+    ('PSU-BQ-750',     N'be quiet! Pure Power 12 M 750W',N'Блоки питания',       9990.00,  2, N'750 Вт; 80+ Gold; модульный'),
+    ('CASE-NZXT-H5',   N'NZXT H5 Flow',                  N'Корпуса',             8990.00,  6, N'Mid-Tower; ATX; сетчатая передняя панель'),
+    ('CASE-DPC-560',   N'Deepcool CC560',                N'Корпуса',             4990.00, 14, N'Mid-Tower; ATX; 4 вентилятора'),
+    ('NB-LEN-IP3',     N'Lenovo IdeaPad 3 15 (Ryzen 5 / 16GB / 512GB)', N'Ноутбуки', 54990.00, 4, N'15.6" FHD; Ryzen 5; 16 ГБ; SSD 512 ГБ'),
+    ('PC-ITE-GAMER',   N'IT-Expert Gamer (R5 7600 / RTX 4060 / 16GB / 1TB)', N'Готовые ПК', 89990.00, 3, N'Ryzen 5 7600; RTX 4060; 16 ГБ DDR5; SSD 1 ТБ')
+) AS v(Sku, Name, Category, Price, Stock, Specs)
+JOIN Categories c ON c.Name = v.Category;
+
+-- Тестовые продажи (чтобы отчёты и ТОП-5 сразу было на чём проверять)
+DECLARE @seller INT = (SELECT Id FROM Users WHERE Login = N'seller');
+DECLARE @admin  INT = (SELECT Id FROM Users WHERE Login = N'admin');
+
+INSERT INTO Orders (OrderDate, UserId, Status) VALUES
+    (DATEADD(DAY,  0, GETDATE()), @seller, N'Проведён'),   -- Id = 1
+    (DATEADD(DAY, -1, GETDATE()), @seller, N'Проведён'),   -- Id = 2
+    (DATEADD(DAY, -2, GETDATE()), @admin,  N'Проведён'),   -- Id = 3
+    (DATEADD(DAY, -5, GETDATE()), @seller, N'Проведён'),   -- Id = 4
+    (DATEADD(DAY, -9, GETDATE()), @seller, N'Отменён'),    -- Id = 5 (в отчёты не попадает)
+    (DATEADD(DAY,-20, GETDATE()), @seller, N'Проведён'),   -- Id = 6
+    (DATEADD(DAY,-35, GETDATE()), @admin,  N'Проведён');   -- Id = 7 (прошлый месяц)
+
+INSERT INTO OrderItems (OrderId, ProductId, Quantity, UnitPrice)
+SELECT v.OrderId, p.Id, v.Qty, p.Price
+FROM (VALUES
+    (1, 'CPU-AMD-7600', 1), (1, 'RAM-KNG-16', 2), (1, 'SSD-SAM-1TB', 1),
+    (2, 'GPU-NV-4060', 1),  (2, 'PSU-CRS-650', 1),
+    (3, 'SSD-KNG-500', 3),  (3, 'RAM-KNG-16', 1),
+    (4, 'CPU-INT-13400F', 1), (4, 'MB-ASUS-B760', 1), (4, 'CASE-DPC-560', 1),
+    (5, 'GPU-NV-4070', 1),
+    (6, 'PC-ITE-GAMER', 1), (6, 'SSD-KNG-500', 2),
+    (7, 'NB-LEN-IP3', 1),   (7, 'GPU-AMD-7600', 1)
+) AS v(OrderId, Sku, Qty)
+JOIN Products p ON p.Sku = v.Sku;
+
+-- Итоговые суммы заказов
+UPDATE o
+SET TotalAmount = (SELECT SUM(oi.Quantity * oi.UnitPrice) FROM OrderItems oi WHERE oi.OrderId = o.Id)
+FROM Orders o;
+
+-- Одно тестовое списание
+INSERT INTO WriteOffs (ProductId, Quantity, Reason, UserId)
+SELECT Id, 1, N'Брак при приёмке', (SELECT Id FROM Users WHERE Login = N'sklad')
+FROM Products WHERE Sku = N'HDD-SEA-2TB';
+GO
+
+-- ---------------------------------------------------------------------
+-- 5. ФУНКЦИИ И ПРЕДСТАВЛЕНИЯ ДЛЯ ОТЧЁТОВ
+--    Период: [From, To) — конец НЕ включается
+--    (для октября: '2026-10-01' и '2026-11-01')
+-- ---------------------------------------------------------------------
+
+-- Продажи по дням за период
+CREATE FUNCTION dbo.fn_SalesByDay (@From DATETIME, @To DATETIME)
+RETURNS TABLE AS RETURN (
+    SELECT CAST(o.OrderDate AS DATE)          AS SaleDate,
+           COUNT(DISTINCT o.Id)               AS OrdersCount,
+           SUM(oi.Quantity)                   AS ItemsSold,
+           SUM(oi.Quantity * oi.UnitPrice)    AS Revenue
+    FROM Orders o
+    JOIN OrderItems oi ON oi.OrderId = o.Id
+    WHERE o.OrderDate >= @From AND o.OrderDate < @To
+      AND o.Status = N'Проведён'
+    GROUP BY CAST(o.OrderDate AS DATE)
+);
+GO
+
+-- ТОП-5 самых продаваемых товаров за период
+CREATE FUNCTION dbo.fn_TopProducts (@From DATETIME, @To DATETIME)
+RETURNS TABLE AS RETURN (
+    SELECT TOP 5
+           p.Id, p.Sku, p.Name,
+           SUM(oi.Quantity)                AS TotalQty,
+           SUM(oi.Quantity * oi.UnitPrice) AS Revenue
+    FROM OrderItems oi
+    JOIN Orders o   ON o.Id = oi.OrderId
+    JOIN Products p ON p.Id = oi.ProductId
+    WHERE o.OrderDate >= @From AND o.OrderDate < @To
+      AND o.Status = N'Проведён'
+    GROUP BY p.Id, p.Sku, p.Name
+    ORDER BY SUM(oi.Quantity) DESC
+);
+GO
+
+-- Товары, которые заканчиваются (остаток меньше 3)
+CREATE VIEW dbo.vw_LowStock AS
+SELECT p.Id, p.Sku, p.Name, c.Name AS Category, p.StockQuantity
+FROM Products p
+JOIN Categories c ON c.Id = p.CategoryId
+WHERE p.IsActive = 1 AND p.StockQuantity < 3;
+GO
+
+-- ---------------------------------------------------------------------
+-- ПРОВЕРКА (выполни по желанию)
+-- ---------------------------------------------------------------------
+-- SELECT * FROM dbo.fn_TopProducts(DATEADD(DAY,-30,GETDATE()), DATEADD(DAY,1,GETDATE()));
+-- SELECT * FROM dbo.fn_SalesByDay (DATEADD(DAY,-30,GETDATE()), DATEADD(DAY,1,GETDATE()));
+-- SELECT * FROM dbo.vw_LowStock;
